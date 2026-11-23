@@ -1,0 +1,993 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Dispatch Invoice Report Generator</title>
+<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<style>
+:root{--navy:#142d4e;--blue:#235a91;--pale:#eef4fa;--ink:#1c2938;--muted:#637286;--line:#d8e0e9;--green:#18794e;--amber:#9a6200;--red:#b42318}
+*{box-sizing:border-box}body{margin:0;background:#f3f6fa;color:var(--ink);font:14px/1.5 Inter,system-ui,-apple-system,Segoe UI,Arial,sans-serif}
+.shell{max-width:1220px;margin:32px auto;padding:0 18px}.hero{background:linear-gradient(120deg,#142d4e,#235a91);color:#fff;border-radius:18px;padding:27px 30px;box-shadow:0 12px 30px #142d4e22}
+.eyebrow{text-transform:uppercase;letter-spacing:.13em;font-size:11px;opacity:.78;font-weight:700}.hero h1{margin:8px 0 7px;font-size:27px}.hero p{margin:0;max-width:850px;color:#e0eaf5}
+.panel{background:#fff;border:1px solid var(--line);border-radius:16px;padding:21px;margin-top:17px;box-shadow:0 4px 18px #203c5a0a}
+.upload{border:2px dashed #9db4cb;background:#f8fbfe;border-radius:13px;padding:25px;text-align:center}.upload input{display:block;margin:14px auto 0;max-width:100%}
+.btn{border:0;background:var(--blue);color:#fff;padding:11px 18px;border-radius:9px;font-weight:700;cursor:pointer}.btn:disabled{opacity:.45;cursor:not-allowed}
+.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.muted{color:var(--muted)}.small{font-size:12px}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:16px}.stat{background:var(--pale);border-radius:11px;padding:13px}.stat b{display:block;font-size:21px;color:var(--navy);overflow-wrap:anywhere}.stat span{color:var(--muted);font-size:12px}
+.status{padding:12px 14px;border-radius:10px;margin-top:14px;display:none;white-space:pre-wrap}.status.error{display:block;background:#fff1f0;color:var(--red)}.status.ok{display:block;background:#edf8f2;color:var(--green)}.status.warn{display:block;background:#fff7e6;color:var(--amber)}
+h2{font-size:17px;margin:0 0 12px;color:var(--navy)}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:10px;max-height:480px}
+table{border-collapse:collapse;width:100%;font-size:12px;white-space:nowrap}th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left}th{background:#edf3f9;color:var(--navy);position:sticky;top:0;z-index:1}tr:last-child td{border-bottom:0}
+.tag{display:inline-block;border-radius:99px;background:#e9f1fa;color:#214f7c;padding:3px 8px;font-size:11px;font-weight:700}.rules{display:grid;grid-template-columns:1fr 1fr;gap:10px}.rule{padding:12px;border:1px solid var(--line);border-radius:10px}.rule b{display:block;color:var(--navy);margin-bottom:3px}
+.warn-list{margin:8px 0 0;padding-left:20px}.warn-list li{margin:3px 0}.footer{margin:18px 2px 35px;color:var(--muted);font-size:12px}
+@media(max-width:720px){.shell{margin:15px auto;padding:0 11px}.hero{padding:21px}.hero h1{font-size:22px}.stats{grid-template-columns:1fr 1fr}.rules{grid-template-columns:1fr}.panel{padding:16px}}
+</style>
+</head>
+<body>
+<main class="shell">
+<header class="hero">
+  <div class="eyebrow">Dispatch reporting tool · Version 2</div>
+  <h1>Invoice Report Generator</h1>
+  <p>Upload the SAP/raw Excel export and generate a dispatch report in the supplied report structure. All processing happens locally in this browser; the workbook is not uploaded to a server.</p>
+</header>
+
+<section class="panel">
+  <h2>1. Upload SAP source files</h2>
+  <div class="rules">
+    <div class="upload">
+      <strong>Raw SAP invoice export (.xlsx / .xls)</strong>
+      <div class="muted small">Must include invoice details and the Outbound Delivery (DO) number.</div>
+      <input id="file" type="file" accept=".xlsx,.xls,.xlsm">
+      <div class="muted small" id="fileName">No RAW file selected</div>
+    </div>
+    <div class="upload">
+      <strong>SAP weighbridge report (.xlsx / .xls)</strong>
+      <div class="muted small">Must include DELIVERY ORDER NO and REMARKS to classify Straight, Bend and stirrups.</div>
+      <input id="weighFile" type="file" accept=".xlsx,.xls,.xlsm">
+      <div class="muted small" id="weighFileName">No weighbridge file selected</div>
+    </div>
+  </div>
+  <div class="row" style="margin-top:15px">
+    <button class="btn" id="generate" disabled>Generate Excel report</button>
+    <span class="muted small">Both files are processed locally in this browser.</span>
+  </div>
+  <div id="status" class="status" role="status" aria-live="polite"></div>
+  <div id="stats" class="stats" hidden></div>
+</section>
+
+<section class="panel" id="previewPanel" hidden>
+  <div class="row" style="justify-content:space-between">
+    <h2>2. Report preview</h2>
+    <span class="tag" id="previewTag">Ready</span>
+  </div>
+  <p class="muted small">Preview shows normalized invoice details, DO-based Straight/Bend classification, material rows, rates and freight. The downloaded workbook contains a separate stirrups section and formula-driven BOF diameter summary.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>SL</th><th>Invoice No.</th><th>DO No.</th><th>Dispatch Class</th><th>Party</th><th>Address / State</th><th>Vehicle No.</th><th>Material</th><th>Qty (MT)</th><th>Basic Rate</th><th>Insurance Rate</th><th>GST %</th><th>Freight Rate</th><th>Freight Amount</th><th>Remarks</th></tr></thead>
+      <tbody id="previewBody"></tbody>
+    </table>
+  </div>
+  <div class="row" style="margin-top:15px">
+    <button class="btn" id="download">Download formatted Excel (.xlsx)</button>
+    <span class="muted small" id="downloadNote"></span>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>3. Applied conversion rules</h2>
+  <div class="rules">
+    <div class="rule"><b>Invoice and party</b><span class="muted small">Rows are grouped by invoice reference. LIMIT and LIMITED are equivalent; a trailing LIMIT is displayed as LIMITED.</span></div>
+    <div class="rule"><b>Address / state</b><span class="muted small">State names are standardized to clean uppercase text; a trailing “(New)” marker is removed.</span></div>
+    <div class="rule"><b>Vehicle number</b><span class="muted small">Recognized Indian registration numbers are standardized with a hyphen before the last four digits, e.g. AP16TJ-5656.</span></div>
+    <div class="rule"><b>Material standardization</b><span class="muted small">Spacing and bracket variations are normalized, e.g. TMT BAR 8MM (BOF) → 8mm[BOF]. Different rates remain separate rows.</span></div>
+    <div class="rule"><b>Insurance for C&amp;I invoices</b><span class="muted small">Only invoices with RAW Incoterms C&amp;I receive an insurance rate of ₹21/MT in Column N, for every material diameter. EXW and FOR invoices leave Column N blank. GST is calculated on Basic Rate + Insurance Rate.</span></div>
+    <div class="rule"><b>GST and values</b><span class="muted small">The effective GST rate is inferred from Net Sales when available. This handles intra-state rows where IGST Rate is 0 but total GST is still 18%.</span></div>
+    <div class="rule"><b>Invoice-level freight</b><span class="muted small">Freight Inclusive amounts are summed across the material lines of each invoice. Freight Rate = invoice freight total ÷ invoice quantity; Freight Amount is the invoice freight total. Columns V and W are merged by invoice.</span></div>
+    <div class="rule"><b>Other transport</b><span class="muted small">SELF BY PARTY → EX BY PARTY. Any other transporter name → EX BY transporter name.</span></div>
+    <div class="rule"><b>Validation</b><span class="muted small">Conflicting party, state, vehicle, transporter or Incoterms values within one invoice are flagged. Freight is calculated separately for every invoice, never pooled by vehicle.</span></div>
+    <div class="rule"><b>DO-based dispatch summary</b><span class="muted small">RAW Outbound Delivery is matched exactly to weighbridge DELIVERY ORDER NO. Straight and Bend are classified from weighbridge REMARKS. Stirrups remain in a separate section; unclassified or unmatched DOs are listed as exceptions.</span></div>
+  </div>
+</section>
+<div class="footer">Compatibility: modern Chrome / Edge. The Excel formatting engine loads from jsDelivr, so an internet connection is required when opening the page. Keep the original raw workbook unchanged.</div>
+</main>
+
+<script>
+'use strict';
+
+const $ = id => document.getElementById(id);
+const MAX_FILE_BYTES = 50 * 1024 * 1024;
+const CI_INSURANCE_RATE_PER_MT = 21;
+let report = null;
+let sourceName = 'dispatch';
+let weighSourceName = 'weighbridge';
+
+const aliases = {
+  reference: ['reference','invoice no','invoice number','inv no','inv.no','billing document'],
+  party: ['sold to party name','party','customer name'],
+  state: ['sold to party state','state','address'],
+  vehicle: ['vehicle number','lorry no','vehicle no','vehicle number '],
+  material: ['material desc','material description','material','size'],
+  qty: ['bill qty','quantity','qty'],
+  incoterms: ['incoterms','incoterm'],
+  basicRate: ['basic rate','rate'],
+  igst: ['igst rate','igst'],
+  netSales: ['net sales','net value','tax inclusive value'],
+  freight: ['freight inclusive','freight rate','freight amount'],
+  transporter: ['transporter name','transporter'],
+  date: ['entry date','date'],
+  cancelRemark: ['cancle remark','cancel remark','cancellation remark'],
+  billingType: ['billing type des.','billing type'],
+  plant: ['plant'],
+  outboundDelivery: ['outbound delivery','delivery order no','delivery order number','do number','delivery']
+};
+
+function clean(value) {
+  return value === null || value === undefined ? '' : String(value).trim();
+}
+
+function headerKey(value) {
+  return clean(value).toLowerCase().replace(/[._]/g,' ').replace(/\s+/g,' ').trim();
+}
+
+function numberValue(value, label, rowNumber, required = false) {
+  if (value === '' || value === null || value === undefined) {
+    if (required) throw new Error(`${label} is blank at Excel row ${rowNumber}.`);
+    return null;
+  }
+  const parsed = typeof value === 'number' ? value : Number(String(value).replace(/[,\u20B9\s]/g,''));
+  if (!Number.isFinite(parsed)) throw new Error(`${label} is not numeric at Excel row ${rowNumber}.`);
+  return parsed;
+}
+
+function identifier(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Number.isInteger(value) ? String(value) : String(value).replace(/\.0+$/,'');
+  }
+  return clean(value).replace(/\.0+$/,'');
+}
+
+function findColumns(headers) {
+  const normalized = headers.map(headerKey);
+  const map = {};
+  for (const [field, names] of Object.entries(aliases)) {
+    const index = normalized.findIndex(header => names.includes(header));
+    if (index >= 0) map[field] = index;
+  }
+  const required = ['reference','party','state','vehicle','material','qty','basicRate','incoterms','freight','transporter','netSales','outboundDelivery'];
+  return {map, missing: required.filter(field => map[field] === undefined)};
+}
+
+function normalizeState(value) {
+  return clean(value)
+    .replace(/\s*\(\s*NEW\s*\)\s*$/i,'')
+    .replace(/\s+/g,' ')
+    .trim()
+    .toUpperCase();
+}
+
+function displayParty(value) {
+  return clean(value).replace(/\s+/g,' ').replace(/\bLIMIT\.?$/i,'LIMITED');
+}
+
+function compareParty(value) {
+  return displayParty(value).toUpperCase().replace(/\s+/g,' ').trim();
+}
+
+function normalizeMaterial(value) {
+  let text = clean(value).toUpperCase().replace(/\s+/g,' ').trim();
+  if (!text) throw new Error('Material description is blank.');
+  text = text.replace(/^TMT\s*BAR\s*/,'');
+  text = text.replace(/(\d+(?:\.\d+)?)\s*MM\b/g,(_,size)=>`${size}mm`);
+  text = text.replace(/\s*\(\s*/g,'[').replace(/\s*\)\s*/g,']');
+  text = text.replace(/\s+/g,'').replace(/\[\[/g,'[').replace(/\]\]/g,']');
+  const sizeMatch = text.match(/^(\d+(?:\.\d+)?mm)(.*)$/i);
+  if (sizeMatch) return sizeMatch[1].toLowerCase() + sizeMatch[2].toUpperCase();
+  return text.toLowerCase();
+}
+
+function normalizeVehicle(value) {
+  const original = clean(value).toUpperCase();
+  const compact = original.replace(/[^A-Z0-9]/g,'');
+  const match = compact.match(/^([A-Z]{2}\d{1,2}[A-Z]{1,3})(\d{4})$/);
+  return match ? `${match[1]}-${match[2]}` : original.replace(/\s+/g,' ');
+}
+
+function isForIncoterm(value) {
+  const term = clean(value).toUpperCase().replace(/[.]/g,'').trim();
+  return /^FOR(?:\b|\/|-|\s)/.test(term) || term === 'FOR';
+}
+
+function isCIIncoterm(value) {
+  return /^C\s*&\s*I$/i.test(clean(value));
+}
+
+function isSelfByParty(value) {
+  return clean(value).toUpperCase().replace(/[\s_-]+/g,' ').trim() === 'SELF BY PARTY';
+}
+
+function round(value, digits = 8) {
+  const factor = 10 ** digits;
+  return Math.round((value + Number.EPSILON) * factor) / factor;
+}
+
+function formulaCell(formula, cachedValue) {
+  if (!Number.isFinite(cachedValue)) throw new Error(`A calculated Excel value is not finite for formula ${formula}.`);
+  return {f:formula,v:cachedValue,t:'n'};
+}
+
+function effectiveGstRate(netSales, qty, basicRate, igstRate, rowNumber) {
+  const base = qty * basicRate;
+  if (netSales !== null && netSales > 0 && base > 0) {
+    const inferred = ((netSales / base) - 1) * 100;
+    if (!Number.isFinite(inferred) || inferred < -0.05 || inferred > 100) {
+      throw new Error(`Net Sales does not produce a valid GST rate at Excel row ${rowNumber}.`);
+    }
+    return round(Math.max(0,inferred),2);
+  }
+  if (igstRate !== null && igstRate >= 0) return round(igstRate,2);
+  throw new Error(`Cannot determine the total GST rate at Excel row ${rowNumber}: Net Sales and IGST Rate are unavailable.`);
+}
+
+
+function findWeighbridgeSheet(workbook) {
+  const aliases = {
+    do: ['delivery order no','delivery order number','outbound delivery','do number'],
+    remarks: ['remarks','remark','material remarks'],
+    netWeight: ['net weight','net wt','net weight mt'],
+    vehicle: ['vehicle no','vehicle number','lorry no']
+  };
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName];
+    if (!sheet || !sheet['!ref']) continue;
+    const rows = XLSX.utils.sheet_to_json(sheet,{header:1,defval:'',raw:true});
+    for (let headerIndex=0; headerIndex<Math.min(rows.length,30); headerIndex++) {
+      const normalized = rows[headerIndex].map(headerKey);
+      const map = {};
+      for (const [field,names] of Object.entries(aliases)) {
+        const index = normalized.findIndex(header=>names.includes(header));
+        if (index >= 0) map[field] = index;
+      }
+      if (map.do !== undefined && map.remarks !== undefined) return {sheetName,rows,headerIndex,map};
+    }
+  }
+  throw new Error('Could not find a weighbridge worksheet containing DELIVERY ORDER NO and REMARKS.');
+}
+
+function normalizeDo(value) {
+  return identifier(value).replace(/\s+/g,'').toUpperCase();
+}
+
+function classifyWeighbridgeRemark(value) {
+  const remark = clean(value).toUpperCase().replace(/\s+/g,' ').trim();
+  if (/^STRAIGHT MATERIAL(?:\b|$)/.test(remark)) return 'STRAIGHT';
+  if (/^BEND MATERIAL(?:\b|$)/.test(remark)) return 'BEND';
+  if (/^RING(?:\b|$)/.test(remark)) return 'STIRRUPS';
+  if (/^BILLETS?(?:\b|$)/.test(remark)) return 'OTHER';
+  return 'UNCLASSIFIED';
+}
+
+function parseWeighbridge(buffer) {
+  const workbook = XLSX.read(buffer,{type:'array',cellDates:true});
+  if (!workbook.SheetNames.length) throw new Error('The weighbridge workbook has no worksheets.');
+  const selected = findWeighbridgeSheet(workbook);
+  const map = selected.map;
+  const byDo = new Map();
+  for (let index=selected.headerIndex+1; index<selected.rows.length; index++) {
+    const row = selected.rows[index];
+    if (!row || row.every(value=>clean(value)==='')) continue;
+    const rowNumber = index+1;
+    const doNo = normalizeDo(row[map.do]);
+    if (!doNo) continue;
+    const remark = clean(row[map.remarks]);
+    if (/^(grand )?total$/i.test(remark)) continue;
+    if (byDo.has(doNo)) throw new Error(`Weighbridge DO ${doNo} appears more than once (rows ${byDo.get(doNo).rowNumber} and ${rowNumber}). Resolve duplicate DO rows before generating.`);
+    const netWeight = map.netWeight===undefined ? null : numberValue(row[map.netWeight],'Net Weight',rowNumber,false);
+    byDo.set(doNo,{doNo,remark,classification:classifyWeighbridgeRemark(remark),netWeight,rowNumber,vehicle:map.vehicle===undefined?'':normalizeVehicle(row[map.vehicle])});
+  }
+  if (!byDo.size) throw new Error('No delivery-order records were found in the weighbridge workbook.');
+  return {byDo,sheetName:selected.sheetName,rowCount:byDo.size};
+}
+
+function findDataSheet(workbook) {
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName];
+    if (!sheet || !sheet['!ref']) continue;
+    const rows = XLSX.utils.sheet_to_json(sheet,{header:1,defval:'',raw:true});
+    const headerIndex = rows.findIndex(row => findColumns(row).missing.length === 0);
+    if (headerIndex >= 0) return {sheetName,rows,headerIndex};
+  }
+  throw new Error('Could not find a worksheet with all required SAP columns. Check the column headings and try again.');
+}
+
+function parseWorkbook(buffer, weighbridge) {
+  if (!window.XLSX) throw new Error('The Excel engine did not load. Check your internet connection and reload this page.');
+  const workbook = XLSX.read(buffer,{type:'array',cellDates:true});
+  if (!workbook.SheetNames.length) throw new Error('The workbook has no worksheets.');
+  const selected = findDataSheet(workbook);
+  const rows = selected.rows;
+  const {map} = findColumns(rows[selected.headerIndex]);
+  const invoices = new Map();
+  const warnings = [];
+  let skippedBlankReference = 0;
+  let skippedCancelled = 0;
+  let skippedNonInvoice = 0;
+  let processedRows = 0;
+
+  for (let index = selected.headerIndex + 1; index < rows.length; index++) {
+    const row = rows[index];
+    if (!row || row.every(value => clean(value) === '')) continue;
+    const rowNumber = index + 1;
+    const reference = identifier(row[map.reference]);
+    if (!reference) { skippedBlankReference++; continue; }
+
+    const cancelRemark = map.cancelRemark === undefined ? '' : clean(row[map.cancelRemark]);
+    if (cancelRemark) { skippedCancelled++; continue; }
+
+    const billingType = map.billingType === undefined ? '' : clean(row[map.billingType]);
+    if (billingType && !/invoice/i.test(billingType)) { skippedNonInvoice++; continue; }
+
+    const partyRaw = clean(row[map.party]);
+    const state = normalizeState(row[map.state]);
+    const vehicleRaw = clean(row[map.vehicle]);
+    const materialRaw = clean(row[map.material]);
+    const doNo = normalizeDo(row[map.outboundDelivery]);
+    if (!doNo) throw new Error(`Outbound Delivery (DO) is blank at RAW Excel row ${rowNumber}.`);
+    if (!partyRaw) throw new Error(`Sold to Party Name is blank at Excel row ${rowNumber}.`);
+    if (!state) throw new Error(`Sold to Party State is blank at Excel row ${rowNumber}.`);
+    if (!vehicleRaw) throw new Error(`Vehicle Number is blank at Excel row ${rowNumber}.`);
+
+    const qty = numberValue(row[map.qty],'Bill Qty',rowNumber,true);
+    const basicRate = numberValue(row[map.basicRate],'Basic Rate',rowNumber,true);
+    const netSales = numberValue(row[map.netSales],'Net Sales',rowNumber,false);
+    const igstRate = map.igst === undefined ? null : numberValue(row[map.igst],'IGST Rate',rowNumber,false);
+    if (qty <= 0) throw new Error(`Bill Qty must be greater than zero at Excel row ${rowNumber}.`);
+    if (basicRate < 0) throw new Error(`Basic Rate cannot be negative at Excel row ${rowNumber}.`);
+
+    const gstRate = effectiveGstRate(netSales,qty,basicRate,igstRate,rowNumber);
+    const incoterm = clean(row[map.incoterms]);
+    const forTerm = isForIncoterm(incoterm);
+    const insuranceRate = 0;
+    const freightRaw = row[map.freight];
+    const freightInclusive = numberValue(freightRaw,'Freight Inclusive',rowNumber,false);
+    if (freightInclusive !== null && freightInclusive < 0) {
+      throw new Error(`Freight Inclusive cannot be negative at Excel row ${rowNumber}.`);
+    }
+    const transporter = clean(row[map.transporter]);
+
+    const item = {
+      reference, party:displayParty(partyRaw), partyCompare:compareParty(partyRaw),
+      state, vehicle:normalizeVehicle(vehicleRaw), material:normalizeMaterial(materialRaw),
+      qty, basicRate, insuranceRate, gstRate,
+      doNo, isStirrups:/STIRRUPS|RING/i.test(materialRaw), isBof:/\bBOF\b/i.test(materialRaw),
+      tax:(basicRate+insuranceRate)*gstRate/100,
+      rate:(basicRate+insuranceRate)*(1+gstRate/100),
+      value:qty*(basicRate+insuranceRate)*(1+gstRate/100),
+      incoterm, forTerm, freightInclusive,
+      transporter, entryDate:map.date === undefined ? null : row[map.date],
+      sourceRow:rowNumber
+    };
+    if (!invoices.has(reference)) {
+      invoices.set(reference,{
+        reference,party:item.party,partyCompare:item.partyCompare,state,vehicle:item.vehicle,doNo:item.doNo,
+        items:[],firstRow:rowNumber
+      });
+    }
+    const invoice = invoices.get(reference);
+    if (invoice.doNo !== item.doNo) throw new Error(`Invoice ${reference} has more than one Outbound Delivery number.`);
+    if (invoice.partyCompare !== item.partyCompare) {
+      throw new Error(`Invoice ${reference} has conflicting party names at Excel row ${rowNumber}.`);
+    }
+    if (invoice.state !== item.state) {
+      throw new Error(`Invoice ${reference} has conflicting state values at Excel row ${rowNumber}.`);
+    }
+    if (invoice.vehicle !== item.vehicle) {
+      throw new Error(`Invoice ${reference} has conflicting vehicle numbers at Excel row ${rowNumber}.`);
+    }
+    invoice.items.push(item);
+    processedRows++;
+  }
+
+  if (!invoices.size) throw new Error('No valid invoice rows were found after excluding blank, cancelled and non-invoice rows.');
+
+  const groups = [...invoices.values()];
+  const doToInvoice = new Map();
+  for (const invoice of groups) {
+    if (doToInvoice.has(invoice.doNo)) throw new Error(`DO ${invoice.doNo} is linked to more than one invoice (${doToInvoice.get(invoice.doNo)} and ${invoice.reference}).`);
+    doToInvoice.set(invoice.doNo,invoice.reference);
+    const weigh = weighbridge.byDo.get(invoice.doNo);
+    invoice.weighbridge = weigh || null;
+    const classification = weigh ? weigh.classification : 'UNCLASSIFIED';
+    const hasBofItems=invoice.items.some(item=>item.isBof);
+    if (!weigh) warnings.push(`Invoice ${invoice.reference}: DO ${invoice.doNo} is missing from the weighbridge report${hasBofItems?'; BOF quantity is UNCLASSIFIED':''}.`);
+    else if (hasBofItems && classification!=='STRAIGHT' && classification!=='BEND') warnings.push(`Invoice ${invoice.reference}: BOF DO ${invoice.doNo} is not classified as Straight or Bend (remark: "${weigh.remark}").`);
+    else if (classification === 'UNCLASSIFIED') warnings.push(`Invoice ${invoice.reference}: DO ${invoice.doNo} has unclear weighbridge remark "${weigh.remark}".`);
+    if (weigh && weigh.vehicle && weigh.vehicle !== invoice.vehicle) warnings.push(`Invoice ${invoice.reference}: DO ${invoice.doNo} vehicle differs between RAW (${invoice.vehicle}) and weighbridge (${weigh.vehicle}).`);
+    for (const item of invoice.items) {
+      item.dispatchClass = item.isStirrups ? 'STIRRUPS' : (item.isBof ? (classification==='STRAIGHT'||classification==='BEND'?classification:'UNCLASSIFIED') : 'OTHER');
+      item.diaLabel = item.isBof ? normalizeMaterial(item.material).replace(/^([0-9.]+mm).*$/i,'$1[BOF]') : '';
+      if (item.isBof && !/^\d+(?:\.\d+)?mm\[BOF\]$/i.test(item.diaLabel)) {
+        throw new Error(`Invoice ${invoice.reference}: unable to identify BOF diameter from "${item.material}". Correct the RAW material description before generating.`);
+      }
+    }
+  }
+  for (const [doNo,weigh] of weighbridge.byDo) {
+    if (!doToInvoice.has(doNo)) warnings.push(`Weighbridge DO ${doNo} has no matching RAW invoice (remark: "${weigh.remark}"); it is excluded from invoice quantities.`);
+  }
+  for (const invoice of groups) {
+    const transporters = [...new Set(invoice.items.map(item=>item.transporter).filter(Boolean).map(value=>value.toUpperCase()))];
+    if (transporters.length > 1) throw new Error(`Invoice ${invoice.reference} has multiple transporter names. Correct the raw file before generating the report.`);
+    invoice.transporter = invoice.items.map(item=>item.transporter).find(Boolean) || '';
+
+    const forFlags = [...new Set(invoice.items.map(item=>item.forTerm))];
+    if (forFlags.length > 1) throw new Error(`Invoice ${invoice.reference} mixes FOR and non-FOR Incoterms. Correct the raw file before generating the report.`);
+    invoice.isFor = forFlags[0] === true;
+
+    const incoterms = [...new Set(invoice.items.map(item=>item.incoterm.toUpperCase()).filter(Boolean))];
+    if (incoterms.length > 1) throw new Error(`Invoice ${invoice.reference} has conflicting Incoterms values.`);
+    invoice.isCI = incoterms.some(isCIIncoterm);
+    for (const item of invoice.items) {
+      item.insuranceRate = invoice.isCI ? CI_INSURANCE_RATE_PER_MT : 0;
+      item.tax = (item.basicRate + item.insuranceRate) * item.gstRate / 100;
+      item.rate = item.basicRate + item.insuranceRate + item.tax;
+      item.value = item.qty * item.rate;
+    }
+
+    if (invoice.isFor) {
+      if (!invoice.transporter) throw new Error(`Invoice ${invoice.reference} is marked FOR but has no Transporter Name.`);
+      invoice.remarks = `FOR/${invoice.transporter}`;
+    } else {
+      invoice.remarks = isSelfByParty(invoice.transporter) ? 'EX BY PARTY' : (invoice.transporter ? `EX BY ${invoice.transporter}` : '');
+      if (!invoice.transporter) warnings.push(`Invoice ${invoice.reference}: Transporter Name is blank; Remarks is left blank.`);
+    }
+
+    invoice.totalQty = invoice.items.reduce((sum,item)=>sum+item.qty,0);
+    if (!(invoice.totalQty > 0)) throw new Error(`Invoice ${invoice.reference} has zero or invalid total quantity.`);
+    invoice.gross = invoice.items.reduce((sum,item)=>sum+item.value,0);
+    invoice.freightAmount = round(invoice.items.reduce((sum,item)=>sum+(item.freightInclusive ?? 0),0),2);
+    invoice.freightRate = invoice.freightAmount > 0 ? invoice.freightAmount / invoice.totalQty : 0;
+
+    const duplicateKeys = new Set();
+    for (const item of invoice.items) {
+      const duplicateKey = `${item.material}|${item.qty}|${item.basicRate}|${item.gstRate}`;
+      if (duplicateKeys.has(duplicateKey)) warnings.push(`Invoice ${invoice.reference}: repeated identical material/quantity/rate line detected; both source rows are retained.`);
+      duplicateKeys.add(duplicateKey);
+    }
+  }
+
+  return {
+    groups, warnings, processedRows, skippedBlankReference, skippedCancelled, skippedNonInvoice, weighbridge,
+    sourceRows:rows.length-selected.headerIndex-1, sheetName:selected.sheetName,
+    firstDate:groups.flatMap(group=>group.items).map(item=>item.entryDate).find(value=>value!==null&&value!=='')
+  };
+}
+
+function dateLabel(data) {
+  const value = data.firstDate;
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return `${String(value.getDate()).padStart(2,'0')}.${String(value.getMonth()+1).padStart(2,'0')}.${value.getFullYear()}`;
+  }
+  if (typeof value === 'number' && window.XLSX) {
+    const parsed = XLSX.SSF.parse_date_code(value);
+    if (parsed) return `${String(parsed.d).padStart(2,'0')}.${String(parsed.m).padStart(2,'0')}.${parsed.y}`;
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) return `${String(parsed.getDate()).padStart(2,'0')}.${String(parsed.getMonth()+1).padStart(2,'0')}.${parsed.getFullYear()}`;
+  }
+  return new Date().toLocaleDateString('en-GB').replaceAll('/','.');
+}
+
+function formatNumber(value,digits=2) {
+  return Number(value).toLocaleString('en-IN',{minimumFractionDigits:digits,maximumFractionDigits:digits});
+}
+
+function showPreview() {
+  const body = $('previewBody');
+  body.replaceChildren();
+  let serial = 0;
+  for (const group of report.groups) {
+    serial++;
+    group.items.forEach((item,index)=>{
+      const tr = document.createElement('tr');
+      const values = [
+        index===0?serial:'', index===0?group.reference:'', index===0?group.doNo:'', item.dispatchClass, index===0?group.party:'',
+        index===0?group.state:'', index===0?group.vehicle:'', item.material,
+        formatNumber(item.qty,3), formatNumber(item.basicRate,2), item.insuranceRate ? formatNumber(item.insuranceRate,2) : '—', `${formatNumber(item.gstRate,2)}%`,
+        index===0?formatNumber(group.freightRate,2):'',
+        index===0?formatNumber(group.freightAmount,2):'',
+        index===0?group.remarks:''
+      ];
+      for (const value of values) {
+        const cell = document.createElement('td');
+        cell.textContent = value;
+        tr.appendChild(cell);
+      }
+      body.appendChild(tr);
+    });
+  }
+  const invoiceCount = report.groups.length;
+  const lineCount = report.groups.reduce((sum,group)=>sum+group.items.length,0);
+  const totalQty = report.groups.reduce((sum,group)=>sum+group.totalQty,0);
+  const totalValue = report.groups.reduce((sum,group)=>sum+group.gross,0);
+  $('stats').hidden = false;
+  $('stats').innerHTML =
+    `<div class="stat"><b>${invoiceCount}</b><span>Invoices</span></div>`+
+    `<div class="stat"><b>${lineCount}</b><span>Material lines</span></div>`+
+    `<div class="stat"><b>${formatNumber(totalQty,3)}</b><span>Total quantity (MT)</span></div>`+
+    `<div class="stat"><b>₹${formatNumber(totalValue,2)}</b><span>Gross value incl. GST</span></div>`;
+  $('previewPanel').hidden = false;
+  $('previewTag').textContent = `${invoiceCount} invoices · ${lineCount} lines`;
+}
+
+function buildWorksheet(data) {
+  const aoa = [];
+  const merges = [];
+  const rowKinds = [];
+  const sectionFirstRows = {main:[],stirrups:[]};
+  const helperRows = [];
+  const thinBlack = {style:'thin',color:{rgb:'FF000000'}};
+  const fullBorder = {top:{...thinBlack},bottom:{...thinBlack},left:{...thinBlack},right:{...thinBlack}};
+  const titleStyle = {
+    font:{name:'Arial Black',sz:12,bold:true,color:{rgb:'FF000000'}},
+    fill:{patternType:'solid',fgColor:{rgb:'FF92D050'}},
+    alignment:{horizontal:'center',vertical:'center'},
+    border:fullBorder
+  };
+  const headerStyle = {
+    font:{name:'Calibri',sz:10,bold:true,color:{rgb:'FF000000'}},
+    fill:{patternType:'solid',fgColor:{rgb:'FFFFFF00'}},
+    alignment:{horizontal:'center',vertical:'center',wrapText:true},
+    border:fullBorder
+  };
+  const bodyBase = {
+    font:{name:'Calibri',sz:10,bold:true,color:{rgb:'FF000000'}},
+    alignment:{horizontal:'center',vertical:'center',wrapText:true},
+    border:fullBorder
+  };
+  const whiteBodyStyle = {...bodyBase,fill:{patternType:'solid',fgColor:{rgb:'FFFFFFFF'}}};
+  const metadataStyle = {
+    font:{name:'Calibri',sz:10,bold:true,color:{rgb:'FF000000'}},
+    alignment:{horizontal:'center',vertical:'center',wrapText:true}
+  };
+  const greenAccountStyle = {...metadataStyle,fill:{patternType:'solid',fgColor:{rgb:'FF92D050'}},border:{top:{...thinBlack},bottom:{...thinBlack}}};
+  const sectionStyle = {
+    font:{name:'Calibri',sz:11,bold:true,color:{rgb:'FF142D4E'}},
+    fill:{patternType:'solid',fgColor:{rgb:'FFD9EAD3'}},
+    alignment:{horizontal:'left',vertical:'center'},
+    border:fullBorder
+  };
+  const summaryHeaderStyle = {
+    font:{name:'Calibri',sz:10,bold:true,color:{rgb:'FF000000'}},
+    fill:{patternType:'solid',fgColor:{rgb:'FFFFFF00'}},
+    alignment:{horizontal:'center',vertical:'center',wrapText:true},
+    border:fullBorder
+  };
+  const numberFormats = {
+    0:'0',1:'@',2:'0"/-"',3:'@',10:'0.00',11:'0.00',12:'0.00',
+    13:'0.00',14:'0.00',15:'0.00',16:'0.00',17:'0',18:'0',
+    19:'0.00',20:'0',21:'0',22:'0',23:'@'
+  };
+  const whiteColumns = new Set([3,4,9,10,11,12,13,14,15,16,17,18,19,20,21,22,24]);
+  const widths = [
+    3.7109375,11.5703125,8.5703125,14.85546875,20.42578125,
+    9.7109375,6.85546875,11,9.42578125,11.5703125,
+    8.42578125,8.140625,9.42578125,6,8.42578125,
+    13,9.85546875,13,10.7109375,8.42578125,
+    10.42578125,9,8.28515625,8.28515625,17.28515625
+  ];
+  const mainGroups = data.groups.map(group=>({...group,sectionItems:group.items.filter(item=>!item.isStirrups)})).filter(group=>group.sectionItems.length);
+  const stirrupGroups = data.groups.map(group=>({...group,sectionItems:group.items.filter(item=>item.isStirrups)})).filter(group=>group.sectionItems.length);
+  const invoicePrimarySection = new Map();
+  for (const group of data.groups) invoicePrimarySection.set(group.reference,group.items.some(item=>!item.isStirrups)?'main':'stirrups');
+
+  aoa.push(['RASHIDHAN [OMPL-9] [TMT DESPATCH] - PARTY']);
+  rowKinds.push('title');
+  aoa.push([' Page No: 1','','','DATE-',dateLabel(data)]);
+  rowKinds.push('meta');
+  aoa.push(['','','','','','','','','','A/C-OMPL']);
+  rowKinds.push('account');
+  const headings = [
+    'SL No','Agent','Avg. Conv ','Inv.No','Party','Code','Type','Address',
+    'Lorry No','Size','Qty','Total Qty.','','','','','Rate','Value',
+    'Gross Value','Insurance','Net Value','Freight Rate','Freight Amount',
+    'Party Balance  ','Remarks'
+  ];
+  aoa.push(headings);
+  rowKinds.push('header');
+
+  const appendInvoiceSection = (groups,sectionName) => {
+    let serial = 0;
+    for (const group of groups) {
+      serial++;
+      const items = group.sectionItems;
+      const startExcelRow = aoa.length + 1;
+      const firstInSection = invoicePrimarySection.get(group.reference) === sectionName;
+      for (let itemIndex=0; itemIndex<items.length; itemIndex++) {
+        const item = items[itemIndex];
+        const first = itemIndex===0;
+        const row = Array(28).fill('');
+        if (first) {
+          row[0]=serial;
+          row[3]=group.reference;
+          row[4]=group.party;
+          row[7]=group.state;
+          row[8]=group.vehicle;
+          row[24]=group.remarks;
+
+        }
+        row[9]=item.material;
+        row[10]=item.qty;
+        row[12]=item.basicRate;
+        row[25]=item.dispatchClass || 'UNCLASSIFIED'; // Z: weighbridge classification
+        row[26]=item.isBof?'BOF':(item.isStirrups?'STIRRUPS':'OTHER'); // AA: product class
+        row[27]=group.doNo; // AB: exact DO key
+        aoa.push(row);
+        rowKinds.push(sectionName==='main'?'data':'stirrupData');
+        helperRows.push({row:startExcelRow+itemIndex,item});
+      }
+      const endExcelRow=aoa.length;
+      for (const col of [0,1,2,3,4,5,6,7,8,11,18,19,20,21,22,23,24]) {
+        merges.push({s:{r:startExcelRow-1,c:col},e:{r:endExcelRow-1,c:col}});
+      }
+      sectionFirstRows[sectionName].push(startExcelRow);
+      const sectionQty=items.reduce((sum,item)=>sum+item.qty,0);
+      const sectionGross=items.reduce((sum,item)=>sum+item.value,0);
+      aoa[startExcelRow-1][11]=formulaCell(`SUM(K${startExcelRow}:K${endExcelRow})`,sectionQty);
+      aoa[startExcelRow-1][18]=formulaCell(`SUM(R${startExcelRow}:R${endExcelRow})`,sectionGross);
+      aoa[startExcelRow-1][19]=0;
+      aoa[startExcelRow-1][20]=formulaCell(`S${startExcelRow}+T${startExcelRow}`,sectionGross);
+      if (firstInSection) {
+        aoa[startExcelRow-1][21]=group.freightRate;
+        aoa[startExcelRow-1][22]=formulaCell(`V${startExcelRow}*L${startExcelRow}`,group.freightAmount);
+      }
+      items.forEach((item,index)=>{
+        const rowNumber=startExcelRow+index;
+        const insuranceRate=item.insuranceRate||0;
+        const taxValue=(item.basicRate+insuranceRate)*item.gstRate/100;
+        const rateValue=item.basicRate+insuranceRate+taxValue;
+        const value=item.qty*rateValue;
+        aoa[rowNumber-1][13]=insuranceRate>0?insuranceRate:'';
+        aoa[rowNumber-1][14]=formulaCell(`(M${rowNumber}+N(N${rowNumber}))*${Number(item.gstRate.toFixed(2))}%`,taxValue);
+        aoa[rowNumber-1][15]=formulaCell(`M${rowNumber}+N(N${rowNumber})+O${rowNumber}`,rateValue);
+        aoa[rowNumber-1][16]=formulaCell(`P${rowNumber}`,rateValue);
+        aoa[rowNumber-1][17]=formulaCell(`K${rowNumber}*Q${rowNumber}`,value);
+      });
+    }
+  };
+
+  appendInvoiceSection(mainGroups,'main');
+  const mainEndRow=aoa.length;
+  const mainQty=mainGroups.reduce((sum,g)=>sum+g.sectionItems.reduce((s,item)=>s+item.qty,0),0);
+  const mainGross=mainGroups.reduce((sum,g)=>sum+g.sectionItems.reduce((s,item)=>s+item.value,0),0);
+  const mainFreight=mainGroups.reduce((sum,g)=>sum+(invoicePrimarySection.get(g.reference)==='main'?g.freightAmount:0),0);
+  const totalRow=Array(28).fill('');
+  totalRow[11]=formulaCell(`SUM(${sectionFirstRows.main.map(row=>`L${row}`).join(',')||'0'})`,mainQty);
+  totalRow[18]=formulaCell(`SUM(${sectionFirstRows.main.map(row=>`S${row}`).join(',')||'0'})`,mainGross);
+  totalRow[20]=formulaCell(`SUM(${sectionFirstRows.main.map(row=>`U${row}`).join(',')||'0'})`,mainGross);
+  totalRow[22]=formulaCell(`SUM(${sectionFirstRows.main.map(row=>`W${row}`).join(',')||'0'})`,mainFreight);
+  aoa.push(totalRow); rowKinds.push('total');
+  if (!mainGroups.length) {
+    const noMain=Array(28).fill(''); noMain[0]='No non-stirrups dispatch rows'; aoa.push(noMain); rowKinds.push('note');
+  }
+
+  if (stirrupGroups.length) {
+    const titleRow=Array(28).fill('');
+    titleRow[0]='RASHIDHAN [OMPL-9] [TMT STIRRUPS RING DESPATCH] - PARTY';
+    aoa.push(titleRow); rowKinds.push('sectionTitle');
+    merges.push({s:{r:aoa.length-1,c:0},e:{r:aoa.length-1,c:24}});
+    aoa.push([' Page No: 1','','','DATE-',dateLabel(data)]); rowKinds.push('meta');
+    aoa.push(headings); rowKinds.push('header');
+    const stirrupDataStartRow=aoa.length+1;
+    appendInvoiceSection(stirrupGroups,'stirrups');
+    const stirrupDataEndRow=aoa.length;
+    const stirrupQty=stirrupGroups.reduce((sum,g)=>sum+g.sectionItems.reduce((s,item)=>s+item.qty,0),0);
+    const stirrupGross=stirrupGroups.reduce((sum,g)=>sum+g.sectionItems.reduce((s,item)=>s+item.value,0),0);
+    const stirrupFreight=stirrupGroups.reduce((sum,g)=>sum+(invoicePrimarySection.get(g.reference)==='stirrups'?g.freightAmount:0),0);
+    const stirrupTotal=Array(28).fill('');
+    stirrupTotal[11]=formulaCell(`SUM(${sectionFirstRows.stirrups.map(row=>`L${row}`).join(',')||'0'})`,stirrupQty);
+    stirrupTotal[18]=formulaCell(`SUM(${sectionFirstRows.stirrups.map(row=>`S${row}`).join(',')||'0'})`,stirrupGross);
+    stirrupTotal[20]=formulaCell(`SUM(${sectionFirstRows.stirrups.map(row=>`U${row}`).join(',')||'0'})`,stirrupGross);
+    stirrupTotal[22]=formulaCell(`SUM(${sectionFirstRows.stirrups.map(row=>`W${row}`).join(',')||'0'})`,stirrupFreight);
+    aoa.push(stirrupTotal); rowKinds.push('stirrupTotal');
+  }
+
+  // Formula-driven BOF diameter summary; helper columns Z:AB are hidden.
+  const diaSet=new Set(data.groups.flatMap(g=>g.items.filter(i=>i.isBof&&i.diaLabel).map(i=>i.diaLabel)));
+  const dias=[...diaSet].sort((a,b)=>parseFloat(a)-parseFloat(b));
+  const summaryTitle=Array(28).fill(''); summaryTitle[0]='BOF DIA-WISE DISPATCH SUMMARY';
+  aoa.push(summaryTitle); rowKinds.push('sectionTitle');
+  merges.push({s:{r:aoa.length-1,c:0},e:{r:aoa.length-1,c:24}});
+  const summaryHeader=Array(28).fill('');
+  summaryHeader[9]='DIA'; summaryHeader[10]='TOTAL MT'; summaryHeader[11]='BEND MT'; summaryHeader[16]='STRAIGHT MT'; summaryHeader[17]='UNCLASSIFIED MT';
+  aoa.push(summaryHeader); rowKinds.push('summaryHeader');
+  const summaryStartRow=aoa.length+1;
+  const mainDataRows=helperRows.filter(x=>x.item.isBof&&!x.item.isStirrups);
+  const mainFirstData=mainGroups.length?5:5;
+  const summaryValues=[];
+  for (const dia of dias) {
+    const total=mainDataRows.filter(x=>x.item.diaLabel===dia).reduce((s,x)=>s+x.item.qty,0);
+    const straight=mainDataRows.filter(x=>x.item.diaLabel===dia&&x.item.dispatchClass==='STRAIGHT').reduce((s,x)=>s+x.item.qty,0);
+    const bend=mainDataRows.filter(x=>x.item.diaLabel===dia&&x.item.dispatchClass==='BEND').reduce((s,x)=>s+x.item.qty,0);
+    const unclassified=mainDataRows.filter(x=>x.item.diaLabel===dia&&x.item.dispatchClass==='UNCLASSIFIED').reduce((s,x)=>s+x.item.qty,0);
+    if (Math.abs(total-(straight+bend+unclassified))>0.000001) {
+      throw new Error(`BOF quantity reconciliation failed for ${dia}: Total MT does not equal Straight + Bend + Unclassified.`);
+    }
+    const row=Array(28).fill(''); row[9]=dia;
+    const r=aoa.length+1;
+    const dataEnd=Math.max(4,mainEndRow);
+    row[10]=formulaCell(`SUMIFS($K$5:$K$${dataEnd},$J$5:$J$${dataEnd},J${r},$AA$5:$AA$${dataEnd},"BOF")`,total);
+    row[11]=formulaCell(`SUMIFS($K$5:$K$${dataEnd},$J$5:$J$${dataEnd},J${r},$Z$5:$Z$${dataEnd},"BEND",$AA$5:$AA$${dataEnd},"BOF")`,bend);
+    row[16]=formulaCell(`SUMIFS($K$5:$K$${dataEnd},$J$5:$J$${dataEnd},J${r},$Z$5:$Z$${dataEnd},"STRAIGHT",$AA$5:$AA$${dataEnd},"BOF")`,straight);
+    row[17]=formulaCell(`SUMIFS($K$5:$K$${dataEnd},$J$5:$J$${dataEnd},J${r},$Z$5:$Z$${dataEnd},"UNCLASSIFIED",$AA$5:$AA$${dataEnd},"BOF")`,unclassified);
+    aoa.push(row); rowKinds.push('summaryData');
+    summaryValues.push({total,straight,bend,unclassified});
+  }
+  const summaryTotal=Array(28).fill('');
+  const summaryEndRow=aoa.length;
+  const sumFormula=(col,key)=>formulaCell(`SUM(${col}${summaryStartRow}:${col}${summaryEndRow})`,summaryValues.reduce((s,v)=>s+v[key],0));
+  summaryTotal[9]='TOTAL';
+  summaryTotal[10]=sumFormula('K','total');
+  summaryTotal[11]=sumFormula('L','bend');
+  summaryTotal[16]=sumFormula('Q','straight');
+  summaryTotal[17]=sumFormula('R','unclassified');
+  aoa.push(summaryTotal); rowKinds.push('summaryTotal');
+
+  const exceptions=[];
+  for (const group of data.groups) {
+    const remarkClass=group.weighbridge?.classification || 'UNCLASSIFIED';
+    const doNeedsReview=!group.weighbridge || remarkClass==='UNCLASSIFIED' ||
+      group.items.some(item=>item.isBof && (!item.diaLabel || (remarkClass!=='STRAIGHT' && remarkClass!=='BEND')));
+    if (doNeedsReview) {
+      const affectedItems=group.items.filter(item=>item.isBof || remarkClass==='UNCLASSIFIED' || !group.weighbridge);
+      for (const item of affectedItems) {
+        exceptions.push([group.reference,group.doNo,item.material,item.qty,group.weighbridge?.remark||'',group.weighbridge?'Remark not classifiable for this dispatch':'DO missing from weighbridge']);
+      }
+    }
+  }
+  for (const [doNo,weigh] of data.weighbridge.byDo) {
+    if (!data.groups.some(g=>g.doNo===doNo)) exceptions.push(['',doNo,'',weigh.netWeight??'',weigh.remark,'No matching RAW invoice; excluded']);
+  }
+  const exceptionTitle=Array(28).fill(''); exceptionTitle[0]='DO MATCHING / CLASSIFICATION EXCEPTIONS';
+  aoa.push(exceptionTitle); rowKinds.push('sectionTitle');
+  merges.push({s:{r:aoa.length-1,c:0},e:{r:aoa.length-1,c:24}});
+  const exceptionHeader=Array(28).fill('');
+  ['Invoice','DO No.','Material','Qty MT','Weighbridge Remark','Issue'].forEach((v,i)=>exceptionHeader[i]=v);
+  aoa.push(exceptionHeader); rowKinds.push('summaryHeader');
+  if (!exceptions.length) {
+    const ok=Array(28).fill(''); ok[0]='No unmatched or unclassified DO records'; aoa.push(ok); rowKinds.push('note');
+  } else {
+    for (const values of exceptions) {
+      const row=Array(28).fill('');
+      values.forEach((v,i)=>row[i]=v);
+      aoa.push(row); rowKinds.push('exception');
+    }
+  }
+
+  const worksheet=XLSX.utils.aoa_to_sheet(aoa);
+  for (let r=0;r<aoa.length;r++) {
+    for (let c=0;c<28;c++) {
+      const address=XLSX.utils.encode_cell({r,c});
+      if (!worksheet[address]) worksheet[address]={t:'s',v:''};
+    }
+  }
+  worksheet['!merges']=merges;
+  worksheet['!merges'].push(
+    {s:{r:0,c:0},e:{r:0,c:24}},
+    {s:{r:1,c:4},e:{r:1,c:7}},
+    {s:{r:2,c:9},e:{r:2,c:11}}
+  );
+  worksheet['!cols']=[
+    ...widths.map((wch,index)=>({wch,...(index>=12&&index<=14?{hidden:true}:{})})),
+    {wch:14,hidden:true},{wch:14,hidden:true},{wch:18,hidden:true}
+  ];
+  worksheet['!rows']=aoa.map((_,index)=>{
+    const kind=rowKinds[index];
+    if (index===0) return {hpt:16.5};
+    if (kind==='header'||kind==='summaryHeader') return {hpt:25.5};
+    if (kind==='sectionTitle') return {hpt:22};
+    if (index>=5) return {hpt:18};
+    return {};
+  });
+  worksheet['!pageSetup']={orientation:'landscape',paperSize:9,scale:66};
+  worksheet['!margins']={left:0,right:0,top:0,bottom:0,header:0.315,footer:0};
+  worksheet['!autofilter']={ref:`J4:K${Math.max(4,mainEndRow)}`};
+
+  for (let r=0;r<aoa.length;r++) {
+    const kind=rowKinds[r];
+    for (let c=0;c<28;c++) {
+      const address=XLSX.utils.encode_cell({r,c});
+      const cell=worksheet[address];
+      if (!cell) continue;
+      if (kind==='title') cell.s=titleStyle;
+      else if (kind==='header'||kind==='summaryHeader') cell.s=summaryHeaderStyle;
+      else if (kind==='sectionTitle') cell.s=sectionStyle;
+      else if (kind==='meta') cell.s=metadataStyle;
+      else if (kind==='account') cell.s=c>=9&&c<=11?greenAccountStyle:metadataStyle;
+      else if (kind==='exception') cell.s={...bodyBase,font:{name:'Calibri',sz:9,bold:false,color:{rgb:'FF000000'}}};
+      else cell.s=whiteColumns.has(c)?{...whiteBodyStyle}:{...bodyBase};
+      if (kind==='summaryTotal'||kind==='total'||kind==='stirrupTotal') {
+        cell.s={...bodyBase,font:{name:'Calibri',sz:10,bold:true,color:{rgb:'FF000000'}},fill:{patternType:'solid',fgColor:{rgb:'FFE2F0D9'}}};
+      }
+      if (Object.prototype.hasOwnProperty.call(numberFormats,c)) cell.s={...cell.s,numFmt:numberFormats[c]};
+      if (kind==='summaryData' && [10,11,16,17].includes(c)) cell.s={...cell.s,numFmt:'0.00'};
+      if (cell.f) {
+        cell.t='n';
+        if (!Number.isFinite(cell.v)) throw new Error(`Missing cached result for formula cell ${address}.`);
+      }
+    }
+  }
+  return worksheet;
+}
+
+function makeWorkbook() {
+  const worksheet = buildWorksheet(report);
+  const workbook = XLSX.utils.book_new();
+  const label = dateLabel(report).replaceAll('/','-');
+  XLSX.utils.book_append_sheet(workbook,worksheet,label.slice(0,31));
+  workbook.Props = {
+    Title:'Dispatch Invoice Report',
+    Subject:'Generated from SAP raw export',
+    Author:'Dispatch Report Generator',
+    Comments:'Generated locally from the supplied SAP RAW invoice and weighbridge workbooks.'
+  };
+  return workbook;
+}
+
+$('file').addEventListener('change',event=>{
+  const file = event.target.files && event.target.files[0];
+  report = null;
+  const weighFile = $('weighFile').files && $('weighFile').files[0];
+  $('generate').disabled = !(file && weighFile && file.size<=MAX_FILE_BYTES && weighFile.size<=MAX_FILE_BYTES);
+  $('previewPanel').hidden = true;
+  $('stats').hidden = true;
+  $('status').className = 'status';
+  $('status').textContent = '';
+  $('downloadNote').textContent = '';
+  $('fileName').textContent = file ? file.name : 'No RAW file selected';
+  if (!file) return;
+  if (file.size > MAX_FILE_BYTES) {
+    $('generate').disabled = true;
+    $('status').className = 'status error';
+    $('status').textContent = 'File is larger than 50 MB. Split the workbook or export only the required dispatch data.';
+    return;
+  }
+  sourceName = file.name.replace(/\.[^.]+$/,'').replace(/[^a-z0-9_-]/gi,'_') || 'dispatch';
+});
+
+$('weighFile').addEventListener('change',event=>{
+  const file = event.target.files && event.target.files[0];
+  report = null;
+  const rawFile = $('file').files && $('file').files[0];
+  $('generate').disabled = !(rawFile && file && rawFile.size<=MAX_FILE_BYTES && file.size<=MAX_FILE_BYTES);
+  $('previewPanel').hidden = true;
+  $('stats').hidden = true;
+  $('status').className = 'status';
+  $('status').textContent = '';
+  $('weighFileName').textContent = file ? file.name : 'No weighbridge file selected';
+  if (!file) return;
+  if (file.size > MAX_FILE_BYTES) {
+    $('generate').disabled = true;
+    $('status').className = 'status error';
+    $('status').textContent = 'Weighbridge file is larger than 50 MB. Export only the required weighbridge data.';
+    return;
+  }
+  weighSourceName = file.name.replace(/\.[^.]+$/,'').replace(/[^a-z0-9_-]/gi,'_') || 'weighbridge';
+});
+
+$('generate').addEventListener('click',async()=>{
+  const file = $('file').files && $('file').files[0];
+  const weighFile = $('weighFile').files && $('weighFile').files[0];
+  if (!file || !weighFile) return;
+  const button = $('generate');
+  button.disabled = true;
+  button.textContent = 'Processing…';
+  report = null;
+  $('previewPanel').hidden = true;
+  $('stats').hidden = true;
+  $('status').className = 'status';
+  $('status').textContent = '';
+  try {
+    const [buffer,weighBuffer] = await Promise.all([file.arrayBuffer(),weighFile.arrayBuffer()]);
+    const weighbridge = parseWeighbridge(weighBuffer);
+    report = parseWorkbook(buffer,weighbridge);
+    showPreview();
+    const messages = [];
+    if (report.skippedBlankReference) messages.push(`Skipped ${report.skippedBlankReference} row(s) with blank invoice reference.`);
+    if (report.skippedCancelled) messages.push(`Excluded ${report.skippedCancelled} cancelled row(s).`);
+    if (report.skippedNonInvoice) messages.push(`Excluded ${report.skippedNonInvoice} non-invoice row(s).`);
+    if (report.warnings.length) messages.push(...report.warnings);
+    $('status').className = report.warnings.length || report.skippedBlankReference || report.skippedCancelled || report.skippedNonInvoice ? 'status warn' : 'status ok';
+    $('status').textContent = `Report prepared from RAW worksheet "${report.sheetName}" and weighbridge worksheet "${report.weighbridge.sheetName}". ${report.processedRows} source line(s), ${report.groups.length} invoice(s), ${report.groups.reduce((sum,g)=>sum+g.items.length,0)} material line(s).` + (messages.length ? `\n\nChecks:\n• ${messages.join('\n• ')}` : '\nNo data consistency warnings were found.');
+  } catch (error) {
+    report = null;
+    $('status').className = 'status error';
+    $('status').textContent = error instanceof Error ? error.message : 'Unable to process this workbook.';
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Generate Excel report';
+  }
+});
+
+$('download').addEventListener('click',async()=>{
+  try {
+    if (!report) throw new Error('Generate the report first.');
+    if (typeof JSZip === 'undefined') throw new Error('The Excel formatting library did not load. Refresh the page and try again.');
+
+    const workbook = makeWorkbook();
+    const date = dateLabel(report).replaceAll('.','-');
+    const filename = `${sourceName}_dispatch_report_${date}.xlsx`;
+    const workbookBytes = XLSX.write(workbook,{
+      bookType:'xlsx',
+      type:'array',
+      compression:true
+    });
+
+    const zip = await JSZip.loadAsync(workbookBytes);
+    const sheetPath = 'xl/worksheets/sheet1.xml';
+    const sheetFile = zip.file(sheetPath);
+    if (!sheetFile) throw new Error('Could not locate the generated worksheet XML.');
+
+    let sheetXml = await sheetFile.async('string');
+    const referenceWidths = [
+      3.7109375,11.5703125,8.5703125,14.85546875,20.42578125,
+      9.7109375,6.85546875,11,9.42578125,11.5703125,
+      8.42578125,8.140625,9.42578125,6,8.42578125,
+      13,9.85546875,13,10.7109375,8.42578125,
+      10.42578125,9,8.28515625,8.28515625,17.28515625
+    ];
+
+    let updatedColumns = 0;
+    sheetXml = sheetXml.replace(/<col\b([^>]*)\/>/g,(tag,attributes)=>{
+      const minMatch = attributes.match(/\bmin="(\d+)"/);
+      const maxMatch = attributes.match(/\bmax="(\d+)"/);
+      if (!minMatch || !maxMatch) return tag;
+      const min = Number(minMatch[1]);
+      const max = Number(maxMatch[1]);
+      if (min !== max || min < 1 || min > referenceWidths.length) return tag;
+      const width = referenceWidths[min-1];
+      if (!Number.isFinite(width) || width <= 0) return tag;
+      updatedColumns++;
+      const updatedAttributes = /\bwidth="[^"]*"/.test(attributes)
+        ? attributes.replace(/\bwidth="[^"]*"/,`width="${width}"`)
+        : `${attributes} width="${width}"`;
+      return `<col${updatedAttributes}/>`;
+    });
+    if (updatedColumns !== referenceWidths.length) {
+      throw new Error(`Could not apply all reference column widths (${updatedColumns}/${referenceWidths.length}).`);
+    }
+
+    const pageSetupTag = '<pageSetup paperSize="9" orientation="landscape" scale="66"/>';
+    if (/<pageSetup\b[^>]*\/>/.test(sheetXml)) {
+      sheetXml = sheetXml.replace(/<pageSetup\b[^>]*\/>/,pageSetupTag);
+    } else if (/<pageMargins\b[^>]*\/>/.test(sheetXml)) {
+      sheetXml = sheetXml.replace(/(<pageMargins\b[^>]*\/>)/,`$1${pageSetupTag}`);
+    } else {
+      throw new Error('Could not locate the worksheet print-margins section.');
+    }
+
+    zip.file(sheetPath,sheetXml);
+    const blob = await zip.generateAsync({
+      type:'blob',
+      mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      compression:'DEFLATE',
+      compressionOptions:{level:6}
+    });
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(()=>URL.revokeObjectURL(url),1000);
+    $('downloadNote').textContent = 'Excel download started.';
+  } catch (error) {
+    $('status').className = 'status error';
+    $('status').textContent = error instanceof Error ? error.message : 'Could not create the workbook.';
+  }
+});
+</script>
+</body>
+</html>
